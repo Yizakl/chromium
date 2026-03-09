@@ -1,0 +1,119 @@
+name: Chromium iOS 16.4.1 Blink Build (Device - No Sign At All)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-ios16-blink-device-no-sign:
+    runs-on: macos-14
+    timeout-minutes: 360
+    env:
+      DEPOT_TOOLS_DIR: ${{ github.workspace }}/depot_tools
+      CHROMIUM_DIR: ${{ github.workspace }}/chromium
+      BLINK_VERSION: "main"
+      OUT_DIR_DEVICE: ${{ github.workspace }}/chromium/src/out/Debug-iphoneos-blink-ios16-no-sign
+      IOS_DEPLOY_TARGET: "16.4"
+      XCODE_VERSION: "15.4"
+      IOS_SDK_VERSION: "16.4"
+
+    steps:
+      - name: 配置基础环境（移除签名依赖）
+        run: |
+          # 仅安装核心编译依赖（移除 ldid）
+          brew install python3 git curl ninja gn cmake
+          # 锁定 Xcode 15.4
+          sudo xcode-select -s /Applications/Xcode_${{ env.XCODE_VERSION }}.app/Contents/Developer
+          # 验证 iOS 16.4 SDK
+          xcodebuild -showsdks | grep iphoneos16.4
+          # 禁用 Xcode 所有签名验证（彻底关闭）
+          defaults write com.apple.dt.Xcode IDESkipPackagePluginFingerprintValidatation -bool YES
+          defaults write com.apple.dt.Xcode CODE_SIGNING_REQUIRED -bool NO
+          defaults write com.apple.dt.Xcode CODE_SIGNING_ALLOWED -bool NO
+          # iOS 16 编译环境变量
+          echo "export MACOSX_DEPLOYMENT_TARGET=13.4" >> $GITHUB_ENV
+          echo "export IOS_SDK_VERSION=16.4" >> $GITHUB_ENV
+
+      - name: 检出 depot_tools
+        run: |
+          git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git $DEPOT_TOOLS_DIR
+          echo "$DEPOT_TOOLS_DIR" >> $GITHUB_PATH
+          gn --version
+
+      - name: 检出 Chromium + Blink 源码（iOS 16 适配）
+        run: |
+          mkdir -p $CHROMIUM_DIR && cd $CHROMIUM_DIR
+          fetch --nohooks ios_chromium
+          cd src
+          git checkout $BLINK_VERSION
+          gclient sync --with_branch_heads --with_tags --revision blink=$BLINK_VERSION --ios-sdk-version=${{ env.IOS_SDK_VERSION }}
+          gclient runhooks --force
+
+      - name: 配置 GN 参数（完全无签名 + iOS 16.4.1 真机）
+        run: |
+          cd $CHROMIUM_DIR/src
+          mkdir -p $OUT_DIR_DEVICE
+          cat > $OUT_DIR_DEVICE/args.gn << EOF
+          # 基础配置
+          is_debug = true
+          target_os = "ios"
+          target_cpu = "arm64"
+          ios_deployment_target = "${{ env.IOS_DEPLOY_TARGET }}"
+          is_component_build = false
+          use_remoteexec = false
+          # 彻底禁用所有代码签名（核心）
+          ios_code_signing = false
+          ios_enable_code_signing = false
+          disable_ios_code_signing = true
+          code_signing_identity = ""
+          provisioning_profile = ""
+          entitlements = ""
+          # 强制启用 Blink 引擎（iOS 16 适配）
+          enable_blink = true
+          blink_enable_all_features = true
+          enable_web_platform_features = true
+          blink_ios_arm64_optimization = true
+          disable_blink_jit = false
+          # iOS 16.x 兼容修复
+          enable_dyld_task_info_fix = true
+          disable_ios17_apis = true
+          use_jsc_ios16 = true
+          # 无签名运行必需的标记
+          ios_skip_code_signing_verification = true
+          disable_ios_app_sandbox = true
+          EOF
+          gn gen $OUT_DIR_DEVICE --check
+
+      - name: 编译 iOS 16.4.1 真机版本（无签名）
+        run: |
+          cd $CHROMIUM_DIR/src
+          autoninja -C $OUT_DIR_DEVICE blink_core ios_chrome
+          # 验证产物（无签名）
+          ls -la $OUT_DIR_DEVICE/ios_chrome.app
+          otool -L $OUT_DIR_DEVICE/ios_chrome.app/ios_chrome | grep blink
+          lipo -info $OUT_DIR_DEVICE/ios_chrome.app/ios_chrome | grep arm64
+          # 验证无签名：检查二进制文件的签名状态
+          codesign -dv $OUT_DIR_DEVICE/ios_chrome.app 2>&1 | grep -i "code signature" || echo "✅ 无代码签名"
+
+      - name: 打包无签名 IPA（仅目录结构，无签名）
+        run: |
+          cd $OUT_DIR_DEVICE
+          mkdir -p Payload
+          cp -r ios_chrome.app Payload/
+          zip -r chromium-ios16.4.1-blink-no-sign.ipa Payload/
+          echo "IPA 文件路径: $OUT_DIR_DEVICE/chromium-ios16.4.1-blink-no-sign.ipa"
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: chromium-ios16.4.1-blink-device-no-sign
+          path: |
+            ${{ env.OUT_DIR_DEVICE }}/chromium-ios16.4.1-blink-no-sign.ipa
+            ${{ env.OUT_DIR_DEVICE }}/ios_chrome.app
+
+      - name: 无签名安装指引（iOS 16.4.1 真机）
+        run: |
+          echo "===== iOS 16.4.1 真机无签名安装步骤 ====="
+          echo "⚠️  无签名安装需设备越狱/免签工具（如 AltStore、Sideloadly 免签模式、FilzaEscaped）"
+          echo "1. 方式1（AltStore 免签）：直接导入 IPA 到 AltStore 安装"
+          echo "2. 方式2（越狱设备）：使用 scp 推送 app 到设备 /Applications 目录"
+          echo "3. 方式3（免签工具）：Sideloadly 选择「No Jailbreak」模式，取消「Sign IPA」选项后安装"
