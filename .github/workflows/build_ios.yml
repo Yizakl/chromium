@@ -1,4 +1,4 @@
-name: Build Chromium iOS (Device)
+name: Build Chromium iOS (Device, v4 Actions)
 
 on:
   push:
@@ -15,7 +15,7 @@ jobs:
 
     steps:
       - name: Checkout source
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Install dependencies
         run: |
@@ -33,7 +33,6 @@ jobs:
       - name: Configure build for iOS Device
         run: |
           cd $CHROMIUM_SRC
-          # arm64 真机构建，关闭签名
           gn gen out/ios_device --args='target_os="ios" target_cpu="arm64" is_debug=true enable_ios_signing=false'
 
       - name: Build Chromium for iOS Device
@@ -51,7 +50,7 @@ jobs:
           rm -rf Payload
 
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: chromium-ios-device
           path: ${{ github.workspace }}/chromium/out/ios_device/Chrome.ipa
